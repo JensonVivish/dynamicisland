@@ -1,5 +1,5 @@
-
 import java.util.Properties
+import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
@@ -18,30 +18,19 @@ android {
         versionName = "1.1.0"
     }
 
-    // Local keystore or CI-provided environment variables.
+    // Load keystore from local file if it exists (for local builds),
+    // otherwise CI injects it via environment variables (see workflow).
     val ksFile = rootProject.file("keystore/digiisland.jks")
     val hasLocalKs = ksFile.exists()
-
-    val ksPass = System.getenv("KEYSTORE_PASSWORD")
-        ?: if (hasLocalKs) "digiisland" else "android"
-
-    val alias = System.getenv("KEY_ALIAS") ?: "digiisland"
-
-    val keyPass = System.getenv("KEY_PASSWORD")
-        ?: if (hasLocalKs) "digiisland" else "android"
-
-    val ciKeystorePath = System.getenv("KEYSTORE_PATH")
+    val ksPass = System.getenv("KEYSTORE_PASSWORD") ?: if (hasLocalKs) "digiisland" else "android"
+    val keyAlias = System.getenv("KEY_ALIAS") ?: "digiisland"
+    val keyPass = System.getenv("KEY_PASSWORD") ?: if (hasLocalKs) "digiisland" else "android"
 
     signingConfigs {
         create("release") {
-            storeFile = if (!ciKeystorePath.isNullOrBlank()) {
-                rootProject.file(ciKeystorePath)
-            } else {
-                ksFile
-            }
-
+            storeFile = if (hasLocalKs) ksFile else rootProject.file("keystore/ci.jks")
             storePassword = ksPass
-            keyAlias = alias
+            keyAlias = keyAlias
             keyPassword = keyPass
         }
     }
@@ -50,15 +39,12 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-
             signingConfig = signingConfigs.getByName("release")
         }
-
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
@@ -69,16 +55,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
     kotlinOptions {
         jvmTarget = "17"
     }
-
     lint {
         checkReleaseBuilds = false
         abortOnError = false
     }
-
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
