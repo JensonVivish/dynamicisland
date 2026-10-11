@@ -26,14 +26,21 @@ android {
     val keyAlias = System.getenv("KEY_ALIAS") ?: "digiisland"
     val keyPass = System.getenv("KEY_PASSWORD") ?: if (hasLocalKs) "digiisland" else "android"
 
+val releaseKeyAlias = System.getenv("KEY_ALIAS")
+val releaseKeyPassword = System.getenv("KEY_PASSWORD")
+val releaseKeystorePassword = System.getenv("KEYSTORE_PASSWORD")
+val releaseKeystorePath = System.getenv("KEYSTORE_PATH")
+
+android {
     signingConfigs {
         create("release") {
-            storeFile = if (hasLocalKs) ksFile else rootProject.file("keystore/ci.jks")
-            storePassword = ksPass
-            keyAlias = keyAlias
-            keyPassword = keyPass
+            storeFile = file(releaseKeystorePath!!)
+            storePassword = releaseKeystorePassword!!
+            keyAlias = releaseKeyAlias!!
+            keyPassword = releaseKeyPassword!!
         }
     }
+}
 
     buildTypes {
         release {
