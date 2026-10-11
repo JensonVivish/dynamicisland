@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">DigiIsland</string>
+    <string name="app_description">A lightweight notification overlay that displays alerts in a Dynamic Island-style pill at the top of your screen.</string>
 </resources>
