@@ -16,15 +16,28 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - uses: gradle/actions/setup-gradle@v4
+      # Cache Gradle home + wrapper + caches so subsequent runs skip downloads
+      - name: Cache Gradle
+        uses: actions/cache@v4
         with:
-          gradle-version: '8.7'
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
 
-      # ── Keystore ──────────────────────────────────────────────────────────
-      # The keystore is cached so the APK signature stays the same across builds.
-      # On the very first run it is generated fresh and then saved to the cache.
-      - name: Restore cached keystore
+      # Cache Android SDK build-tools / platforms
+      - name: Cache Android SDK packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ANDROID_HOME }}/build-tools
+          key: android-sdk-bt-34
+          restore-keys: android-sdk-bt-
+
+      # Cache the signing keystore so signature stays stable
+      - name: Cache keystore
         id: cache-ks
         uses: actions/cache@v4
         with:
@@ -52,7 +65,14 @@ jobs:
           KEYSTORE_PASSWORD: digiisland
           KEY_ALIAS: digiisland
           KEY_PASSWORD: digiisland
-        run: gradle assembleRelease --no-daemon --stacktrace
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.configureondemand=true"
+        run: |
+          gradle assembleRelease \
+            --no-daemon \
+            --parallel \
+            --build-cache \
+            --configuration-cache \
+            --stacktrace
 
       - name: Rename APK
         run: |
@@ -63,9 +83,3 @@ jobs:
         with:
           name: DigiIsland-APK
           path: dist/DigiIsland-v1.1.apk
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/DigiIsland-v1.1.apk
