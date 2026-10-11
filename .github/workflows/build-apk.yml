@@ -1,11 +1,8 @@
-
 name: Build APK
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -13,27 +10,72 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      # ── Keystore ──────────────────────────────────────────────────────────
+      # If you added KEYSTORE_B64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
+      # as repo secrets, those are used.  Otherwise a fresh keystore is generated
+      # once and cached so the signature stays stable across builds.
+      - name: Restore cached keystore
+        id: cache-ks
+        uses: actions/cache@v4
         with:
-          name: DigiIsland-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          path: keystore/
+          key: digiisland-keystore-v1
 
+      - name: Generate keystore (first run only)
+        if: steps.cache-ks.outputs.cache-hit != 'true' && secrets.KEYSTORE_B64 == ''
+        run: |
+          mkdir -p keystore
+          keytool -genkey -v \
+            -keystore keystore/ci.jks \
+            -alias digiisland \
+            -keyalg RSA -keysize 2048 \
+            -validity 10000 \
+            -storepass digiisland \
+            -keypass digiisland \
+            -dname "CN=DigiIsland,O=DigiforgeDynamics,C=IN"
+
+      - name: Decode keystore from secret (if provided)
+        if: secrets.KEYSTORE_B64 != ''
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          mkdir -p keystore
+          echo "$KEYSTORE_B64" | base64 -d > keystore/ci.jks
+
+      - name: Write local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Build release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'digiisland' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'digiisland' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'digiisland' }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/DigiIsland-v1.1.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DigiIsland-APK
+          path: dist/DigiIsland-v1.1.apk
+
+      # Optional: auto-create a GitHub Release on version tags (e.g. v1.1.0)
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/DigiIsland-v1.1.apk
