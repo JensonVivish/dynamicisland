@@ -22,9 +22,8 @@ jobs:
           gradle-version: '8.7'
 
       # ── Keystore ──────────────────────────────────────────────────────────
-      # If you added KEYSTORE_B64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD
-      # as repo secrets, those are used.  Otherwise a fresh keystore is generated
-      # once and cached so the signature stays stable across builds.
+      # The keystore is cached so the APK signature stays the same across builds.
+      # On the very first run it is generated fresh and then saved to the cache.
       - name: Restore cached keystore
         id: cache-ks
         uses: actions/cache@v4
@@ -33,7 +32,7 @@ jobs:
           key: digiisland-keystore-v1
 
       - name: Generate keystore (first run only)
-        if: steps.cache-ks.outputs.cache-hit != 'true' && secrets.KEYSTORE_B64 == ''
+        if: steps.cache-ks.outputs.cache-hit != 'true'
         run: |
           mkdir -p keystore
           keytool -genkey -v \
@@ -45,22 +44,14 @@ jobs:
             -keypass digiisland \
             -dname "CN=DigiIsland,O=DigiforgeDynamics,C=IN"
 
-      - name: Decode keystore from secret (if provided)
-        if: secrets.KEYSTORE_B64 != ''
-        env:
-          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
-        run: |
-          mkdir -p keystore
-          echo "$KEYSTORE_B64" | base64 -d > keystore/ci.jks
-
       - name: Write local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: Build release APK
         env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'digiisland' }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'digiisland' }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'digiisland' }}
+          KEYSTORE_PASSWORD: digiisland
+          KEY_ALIAS: digiisland
+          KEY_PASSWORD: digiisland
         run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: Rename APK
@@ -73,7 +64,6 @@ jobs:
           name: DigiIsland-APK
           path: dist/DigiIsland-v1.1.apk
 
-      # Optional: auto-create a GitHub Release on version tags (e.g. v1.1.0)
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
