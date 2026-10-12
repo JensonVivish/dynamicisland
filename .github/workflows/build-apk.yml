@@ -18,25 +18,20 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # Cache Gradle home + wrapper + caches so subsequent runs skip downloads
-      - name: Cache Gradle
+      - name: Cache Gradle caches
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
-          restore-keys: gradle-
+          path: ~/.gradle/caches
+          key: gradle-caches-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-caches-
 
-      # Cache Android SDK build-tools / platforms
-      - name: Cache Android SDK packages
+      - name: Cache Gradle wrapper
         uses: actions/cache@v4
         with:
-          path: ${{ env.ANDROID_HOME }}/build-tools
-          key: android-sdk-bt-34
-          restore-keys: android-sdk-bt-
+          path: ~/.gradle/wrapper
+          key: gradle-wrapper-${{ hashFiles('**/gradle-wrapper.properties') }}
+          restore-keys: gradle-wrapper-
 
-      # Cache the signing keystore so signature stays stable
       - name: Cache keystore
         id: cache-ks
         uses: actions/cache@v4
@@ -60,18 +55,20 @@ jobs:
       - name: Write local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
       - name: Build release APK
         env:
           KEYSTORE_PASSWORD: digiisland
           KEY_ALIAS: digiisland
           KEY_PASSWORD: digiisland
-          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.configureondemand=true"
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true"
         run: |
-          gradle assembleRelease \
+          ./gradlew assembleRelease \
             --no-daemon \
             --parallel \
             --build-cache \
-            --configuration-cache \
             --stacktrace
 
       - name: Rename APK
@@ -83,3 +80,9 @@ jobs:
         with:
           name: DigiIsland-APK
           path: dist/DigiIsland-v1.1.apk
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/DigiIsland-v1.1.apk
