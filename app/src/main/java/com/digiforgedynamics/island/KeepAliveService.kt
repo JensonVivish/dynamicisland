@@ -16,10 +16,6 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 
-/**
- * Foreground service: keeps the process alive and listens for charging / low-battery broadcasts
- * (those can't be declared in the manifest). Idle cost is essentially zero - no timers, no polling.
- */
 class KeepAliveService : Service() {
 
     private var rx: BroadcastReceiver? = null
@@ -30,10 +26,14 @@ class KeepAliveService : Service() {
         super.onCreate()
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
-            NotificationChannel(CH, "Island service", NotificationManager.IMPORTANCE_MIN)
+            NotificationChannel(CH, "Island service", NotificationManager.IMPORTANCE_MIN).apply {
+                setShowBadge(false)
+            }
         )
         val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
         )
         val n = Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat_island)
@@ -42,25 +42,27 @@ class KeepAliveService : Service() {
             .setOngoing(true)
             .setShowWhen(false)
             .build()
-        if (Build.VERSION.SDK_INT >= 34) {
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // API 34+
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(1, n)
         }
 
-        val f = IntentFilter()
-        f.addAction(Intent.ACTION_POWER_CONNECTED)
-        f.addAction(Intent.ACTION_POWER_DISCONNECTED)
-        f.addAction(Intent.ACTION_BATTERY_LOW)
+        val f = IntentFilter().apply {
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(Intent.ACTION_BATTERY_LOW)
+        }
         val r = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                onPower(intent?.action)
-            }
+            override fun onReceive(context: Context?, intent: Intent?) = onPower(intent?.action)
         }
         rx = r
-        if (Build.VERSION.SDK_INT >= 33) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(r, f, Context.RECEIVER_EXPORTED)
         } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(r, f)
         }
         IslandController.get(this)
@@ -74,13 +76,7 @@ class KeepAliveService : Service() {
     }
 
     override fun onDestroy() {
-        val r = rx
-        if (r != null) {
-            try {
-                unregisterReceiver(r)
-            } catch (e: Exception) {
-            }
-        }
+        rx?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         rx = null
         IslandController.get(this).refresh()
         super.onDestroy()
@@ -90,7 +86,7 @@ class KeepAliveService : Service() {
         if (!Prefs.enabled(this) || !Prefs.charging(this)) return
         val ctl = IslandController.get(this)
         val green = Color.rgb(52, 199, 89)
-        val red = Color.rgb(255, 69, 58)
+        val red   = Color.rgb(255, 69, 58)
         when (action) {
             Intent.ACTION_POWER_CONNECTED -> ctl.show(
                 IslandEvent(
@@ -98,7 +94,7 @@ class KeepAliveService : Service() {
                     title = "Charging",
                     iconRes = android.R.drawable.ic_lock_idle_charging,
                     iconTint = green,
-                    accessoryText = pct().toString() + "%",
+                    accessoryText = "${pct()}%",
                     accessoryColor = green
                 ), 3500
             )
@@ -109,7 +105,7 @@ class KeepAliveService : Service() {
                     title = "Battery low",
                     iconRes = android.R.drawable.ic_dialog_alert,
                     iconTint = red,
-                    accessoryText = pct().toString() + "%",
+                    accessoryText = "${pct()}%",
                     accessoryColor = red
                 ), 5000
             )
@@ -123,7 +119,5 @@ class KeepAliveService : Service() {
         return if (l < 0 || s <= 0) 0 else l * 100 / s
     }
 
-    companion object {
-        private const val CH = "island_service"
-    }
+    companion object { private const val CH = "island_service" }
 }

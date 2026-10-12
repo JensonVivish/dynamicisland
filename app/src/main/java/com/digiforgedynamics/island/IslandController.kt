@@ -39,32 +39,18 @@ data class IslandEvent(
     val expandable: Boolean get() = actions.isNotEmpty() || !text.isNullOrEmpty()
 }
 
-/** Sends a PendingIntent from the overlay, allowed to start an activity from the background. */
 fun firePending(ctx: Context, pi: PendingIntent?) {
     if (pi == null) return
     try {
-        val o = ActivityOptions.makeBasic()
-        if (Build.VERSION.SDK_INT >= 34) {
-            o.setPendingIntentBackgroundActivityStartMode(
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-            )
-        }
-        pi.send(ctx, 0, null, null, null, null, o.toBundle())
-    } catch (e: Exception) {
-        // PendingIntent cancelled or not allowed - nothing else to do
-    }
+        val opts = ActivityOptions.makeBasic()
+        pi.send(ctx, 0, null, null, null, null, opts.toBundle())
+    } catch (_: Exception) {}
 }
 
-/**
- * Owns the overlay window and decides what the island shows.
- * Everything runs on the main thread. The overlay window only exists while there is something to show.
- */
 class IslandController private constructor(private val app: Context) {
 
     companion object {
-        @Volatile
-        private var inst: IslandController? = null
-
+        @Volatile private var inst: IslandController? = null
         fun get(c: Context): IslandController =
             inst ?: synchronized(this) {
                 inst ?: IslandController(c.applicationContext).also { inst = it }
@@ -85,8 +71,6 @@ class IslandController private constructor(private val app: Context) {
     private val dismissed = HashSet<String>()
 
     private val timeout = Runnable { onTimeout() }
-
-    // ---- public API (safe to call from any thread) -------------------------------------------
 
     fun show(e: IslandEvent, ms: Long) {
         h.post {
@@ -114,41 +98,25 @@ class IslandController private constructor(private val app: Context) {
     fun setMedia(e: IslandEvent?) {
         h.post {
             if (e == null) {
-                media = null
-                lastMediaKey = ""
-                mediaHidden = false
+                media = null; lastMediaKey = ""; mediaHidden = false
             } else {
-                if (e.key != lastMediaKey) {
-                    mediaHidden = false
-                    lastMediaKey = e.key
-                }
+                if (e.key != lastMediaKey) { mediaHidden = false; lastMediaKey = e.key }
                 media = e
             }
             render()
         }
     }
 
-    /** Re-evaluate visibility (settings or orientation changed). */
-    fun refresh() {
-        h.post { render() }
-    }
+    fun refresh() { h.post { render() } }
 
-    /** Re-apply position settings to a visible island. */
     fun applySettings() {
         h.post {
-            val v = view
-            val p = lp
-            if (v != null && p != null) {
-                applyPos(p)
-                try {
-                    wm.updateViewLayout(v, p)
-                } catch (e: Exception) {
-                }
-            }
+            val v = view ?: return@post
+            val p = lp ?: return@post
+            applyPos(p)
+            try { wm.updateViewLayout(v, p) } catch (_: Exception) {}
         }
     }
-
-    // ---- gestures from the view --------------------------------------------------------------
 
     fun onTap() {
         val cur = current() ?: return
@@ -191,8 +159,6 @@ class IslandController private constructor(private val app: Context) {
         render()
     }
 
-    // ---- internals ---------------------------------------------------------------------------
-
     private fun current(): IslandEvent? = transient ?: (if (mediaHidden) null else media)
 
     private fun onTimeout() {
@@ -207,9 +173,7 @@ class IslandController private constructor(private val app: Context) {
         val landscape =
             app.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         if (cur == null || !Prefs.enabled(app) || (landscape && Prefs.hideLandscape(app))) {
-            expanded = false
-            detach()
-            return
+            expanded = false; detach(); return
         }
         val v = view ?: attach() ?: return
         v.bind(cur, expanded)
@@ -229,30 +193,25 @@ class IslandController private constructor(private val app: Context) {
             PixelFormat.TRANSLUCENT
         )
         p.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        p.layoutInDisplayCutoutMode =
-            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            p.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
         p.title = "DigiIsland"
         applyPos(p)
-        try {
+        return try {
             wm.addView(v, p)
-        } catch (e: Exception) {
-            return null
-        }
-        view = v
-        lp = p
-        v.animateIn()
-        return v
+            view = v; lp = p
+            v.animateIn()
+            v
+        } catch (_: Exception) { null }
     }
 
     private fun detach() {
         val v = view ?: return
-        view = null
-        lp = null
+        view = null; lp = null
         v.animateOut {
-            try {
-                wm.removeViewImmediate(v)
-            } catch (e: Exception) {
-            }
+            try { wm.removeViewImmediate(v) } catch (_: Exception) {}
         }
     }
 
