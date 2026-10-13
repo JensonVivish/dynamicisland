@@ -31,32 +31,31 @@ class KeepAliveService : Service() {
             }
         )
         val open = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
-        val n = Notification.Builder(this, CH)
+        val fgNotif = Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_stat_island)
-            .setContentTitle("DigiIsland is running")
+            .setContentTitle("DigiIsland is active")
             .setContentIntent(open)
             .setOngoing(true)
             .setShowWhen(false)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // API 34+
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            startForeground(1, fgNotif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
-            startForeground(1, n)
+            startForeground(1, fgNotif)
         }
 
         val f = IntentFilter().apply {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
             addAction(Intent.ACTION_BATTERY_LOW)
+            addAction(Intent.ACTION_BATTERY_OKAY)
+            addAction(Intent.ACTION_SCREEN_ON)
         }
         val r = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) = onPower(intent?.action)
+            override fun onReceive(c: Context?, i: Intent?) { onSystemEvent(i?.action) }
         }
         rx = r
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -78,37 +77,41 @@ class KeepAliveService : Service() {
     override fun onDestroy() {
         rx?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         rx = null
-        IslandController.get(this).refresh()
         super.onDestroy()
     }
 
-    private fun onPower(action: String?) {
+    private fun onSystemEvent(action: String?) {
         if (!Prefs.enabled(this) || !Prefs.charging(this)) return
-        val ctl = IslandController.get(this)
+        val ctl   = IslandController.get(this)
         val green = Color.rgb(52, 199, 89)
         val red   = Color.rgb(255, 69, 58)
         when (action) {
             Intent.ACTION_POWER_CONNECTED -> ctl.show(
                 IslandEvent(
-                    key = "charging",
-                    title = "Charging",
-                    iconRes = android.R.drawable.ic_lock_idle_charging,
-                    iconTint = green,
+                    key           = "charging",
+                    title         = "Charging",
+                    iconRes       = android.R.drawable.ic_lock_idle_charging,
+                    iconTint      = green,
                     accessoryText = "${pct()}%",
-                    accessoryColor = green
+                    accessoryColor= green,
+                    style         = IslandStyle.DEFAULT
                 ), 3500
             )
             Intent.ACTION_POWER_DISCONNECTED -> ctl.remove("charging")
             Intent.ACTION_BATTERY_LOW -> ctl.show(
                 IslandEvent(
-                    key = "battery_low",
-                    title = "Battery low",
-                    iconRes = android.R.drawable.ic_dialog_alert,
-                    iconTint = red,
+                    key           = "battery_low",
+                    title         = "Battery low",
+                    iconRes       = android.R.drawable.ic_dialog_alert,
+                    iconTint      = red,
+                    text          = "Connect charger soon",
                     accessoryText = "${pct()}%",
-                    accessoryColor = red
-                ), 5000
+                    accessoryColor= red,
+                    style         = IslandStyle.DEFAULT,
+                    sticky        = true
+                ), 0
             )
+            Intent.ACTION_BATTERY_OKAY -> ctl.remove("battery_low")
         }
     }
 

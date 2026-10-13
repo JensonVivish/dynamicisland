@@ -1,351 +1,505 @@
 package com.digiforgedynamics.island
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ValueAnimator
+import android.animation.*
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Outline
-import android.graphics.Paint
-import android.graphics.Typeface
+import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.text.TextUtils
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.view.ViewOutlineProvider
-import android.view.animation.DecelerateInterpolator
-import android.view.animation.OvershootInterpolator
-import android.widget.Chronometer
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
-import kotlin.math.abs
-import kotlin.math.min
-import kotlin.math.sin
+import android.view.*
+import android.view.animation.*
+import android.widget.*
+import kotlin.math.*
 
-/** The black pill. Compact = one line, expanded = title + text + action buttons. */
+// ── Animated equalizer bars (music) ──────────────────────────────────────────
+class EqView(ctx: Context) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(34, 211, 238) }
+    private var t = 0f
+    private val h = Handler(Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() { t += 0.35f; invalidate(); h.postDelayed(this, 90) }
+    }
+    override fun onAttachedToWindow()   { super.onAttachedToWindow();    h.post(tick) }
+    override fun onDetachedFromWindow() { h.removeCallbacks(tick); super.onDetachedFromWindow() }
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat(); val bw = w / 5f
+        for (i in 0..2) {
+            val amp = 0.3f + 0.7f * abs(sin(t + i * 1.7f))
+            val bh  = h * amp
+            c.drawRoundRect(i * 2 * bw, h - bh, i * 2 * bw + bw, h, bw/2, bw/2, p)
+        }
+    }
+}
+
+// ── Mic / call waveform ───────────────────────────────────────────────────────
+class WaveView(ctx: Context, col: Int = Color.rgb(52, 199, 89)) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = col }
+    private var t = 0f
+    private val h = Handler(Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() { t += 0.28f; invalidate(); h.postDelayed(this, 60) }
+    }
+    override fun onAttachedToWindow()   { super.onAttachedToWindow();    h.post(tick) }
+    override fun onDetachedFromWindow() { h.removeCallbacks(tick); super.onDetachedFromWindow() }
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val ht = height.toFloat()
+        val bars = 5; val gap = w / (bars * 2 - 1f); val bw = gap * 0.75f
+        for (i in 0 until bars) {
+            val amp = 0.2f + 0.8f * abs(sin(t + i * 1.3f))
+            val bh  = max(ht * 0.15f, ht * amp)
+            val x   = i * 2 * gap
+            c.drawRoundRect(x, ht - bh, x + bw, ht, bw/2, bw/2, p)
+        }
+    }
+}
+
+// ── Circular progress ring (downloads) ───────────────────────────────────────
+class RingProgress(ctx: Context) : View(ctx) {
+    private val bg   = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f; color = 0x33FFFFFF }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f; color = Color.rgb(34,211,238); strokeCap = Paint.Cap.ROUND }
+    var pct = 0f; set(v) { field = v; invalidate() }
+    override fun onDraw(c: Canvas) {
+        val cx = width/2f; val cy = height/2f; val r = min(cx,cy) - 3f
+        val rect = RectF(cx-r, cy-r, cx+r, cy+r)
+        c.drawOval(rect, bg); c.drawArc(rect, -90f, 360f * pct, false, fill)
+    }
+}
+
+// ── Pulsing dot (privacy indicator) ──────────────────────────────────────────
+class PulseDot(ctx: Context, col: Int) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = col }
+    private var sc = 1f
+    private val anim = ValueAnimator.ofFloat(0.6f, 1.3f, 0.6f).apply {
+        duration = 1100; repeatCount = ValueAnimator.INFINITE
+        interpolator = AccelerateDecelerateInterpolator()
+        addUpdateListener { sc = it.animatedValue as Float; invalidate() }
+    }
+    override fun onAttachedToWindow()   { super.onAttachedToWindow();    anim.start() }
+    override fun onDetachedFromWindow() { anim.cancel(); super.onDetachedFromWindow() }
+    override fun onDraw(c: Canvas) {
+        c.drawCircle(width/2f, height/2f, min(width,height)/2f * sc, p)
+    }
+}
+
+// ── Face / payment scan ring ──────────────────────────────────────────────────
+class ScanRing(ctx: Context) : View(ctx) {
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = 0x44FFFFFF }
+    private val arc  = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2.5f; color = Color.rgb(34,211,238); strokeCap = Paint.Cap.ROUND }
+    private var sweep = 0f
+    private val anim = ValueAnimator.ofFloat(0f, 360f).apply {
+        duration = 1400; repeatCount = 3; interpolator = LinearInterpolator()
+        addUpdateListener { sweep = it.animatedValue as Float; invalidate() }
+    }
+    override fun onAttachedToWindow()   { super.onAttachedToWindow();    anim.start() }
+    override fun onDetachedFromWindow() { anim.cancel(); super.onDetachedFromWindow() }
+    override fun onDraw(c: Canvas) {
+        val cx = width/2f; val cy = height/2f; val r = min(cx,cy) - 3f
+        val rect = RectF(cx-r, cy-r, cx+r, cy+r)
+        c.drawOval(rect, ring); c.drawArc(rect, -90f, sweep, false, arc)
+    }
+}
+
+// ── Main island pill ─────────────────────────────────────────────────────────
 class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ctx) {
 
     private val d = ctx.resources.displayMetrics.density
-    private fun dp(v: Int): Int = (v * d + 0.5f).toInt()
+    private fun dp(v: Number) = (v.toFloat() * d + 0.5f).toInt()
 
-    private val pill = LinearLayout(ctx)
-    private val bg = GradientDrawable()
-    private val icon = ImageView(ctx)
-    private val title = TextView(ctx)
-    private val body = TextView(ctx)
-    private val accessory = FrameLayout(ctx)
-    private val actionRow = LinearLayout(ctx)
+    // Container
+    private val pill    = LinearLayout(ctx)
+    private val pillBg  = GradientDrawable()
 
-    private var anim: ValueAnimator? = null
-    private var shown = false
+    // Left icon
+    private val icon    = ImageView(ctx)
+
+    // Centre column  ← all spacing lives here
+    private val colView = LinearLayout(ctx)
+    private val titleTv = TextView(ctx)
+    private val bodyTv  = TextView(ctx)
+    private val subTv   = TextView(ctx)
+    private val chron   = Chronometer(ctx)
+    private val pBarH   = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal)
+    private val navRow  = LinearLayout(ctx)
+    private val navIcon = ImageView(ctx)
+    private val navDist = TextView(ctx)
+
+    // Right accessories
+    private val eqView   = EqView(ctx)
+    private val waveView = WaveView(ctx, Color.rgb(52,199,89))
+    private val rProg    = RingProgress(ctx)
+    private val scanRing = ScanRing(ctx)
+    private val accTv    = TextView(ctx)
+    private val dot      = PulseDot(ctx, Color.rgb(34,211,238))
+
+    // Action row
+    private val actRow = LinearLayout(ctx)
+
+    // Size anim
+    private var sizeAnim: ValueAnimator? = null
+    private var shown       = false
     private var curExpanded = false
-    private var downY = 0f
-    private var downT = 0L
+
+    // Gesture
+    private var downX = 0f; private var downY = 0f
+    private var downT = 0L; private var isLong = false
+    private val longCb = Runnable { isLong = true; c.onLongPress() }
 
     init {
-        bg.setColor(Color.BLACK)
-        bg.cornerRadius = dp(18).toFloat()
-        pill.background = bg
+        // ── pill background ──
+        pillBg.setColor(Color.BLACK); pillBg.cornerRadius = dp(18).toFloat()
+        pill.background = pillBg
         pill.orientation = LinearLayout.VERTICAL
-        pill.setPadding(dp(12), dp(8), dp(12), dp(8))
         pill.clipToOutline = true
-        pill.minimumWidth = dp(96)
+        pill.minimumWidth = dp(90)
+        // outer padding of the pill: 12 left/right, 9 top/bottom — gives breathing room
+        pill.setPadding(dp(12), dp(9), dp(12), dp(9))
 
-        val header = LinearLayout(ctx)
-        header.orientation = LinearLayout.HORIZONTAL
-        header.gravity = Gravity.CENTER_VERTICAL
-
+        // ── icon ──
         icon.scaleType = ImageView.ScaleType.CENTER_CROP
         icon.clipToOutline = true
         icon.outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View?, outline: Outline?) {
-                if (view == null || outline == null) return
-                outline.setRoundRect(0, 0, view.width, view.height, view.width * 0.28f)
+            override fun getOutline(v: View, o: Outline) {
+                o.setRoundRect(0, 0, v.width, v.height, v.width * 0.28f)
             }
         }
-        header.addView(icon, LinearLayout.LayoutParams(dp(26), dp(26)))
 
-        val col = LinearLayout(ctx)
-        col.orientation = LinearLayout.VERTICAL
-        title.setTextColor(Color.WHITE)
-        title.textSize = 14f
-        title.setTypeface(title.typeface, Typeface.BOLD)
-        title.maxLines = 1
-        title.ellipsize = TextUtils.TruncateAt.END
-        body.setTextColor(0xFFB5B5BA.toInt())
-        body.textSize = 13f
-        body.maxLines = 3
-        body.ellipsize = TextUtils.TruncateAt.END
-        col.addView(title)
-        col.addView(body)
-        val cp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        cp.marginStart = dp(10)
-        cp.marginEnd = dp(10)
-        header.addView(col, cp)
-        header.addView(
-            accessory,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
+        // ── title / body / sub ──
+        titleTv.setTextColor(Color.WHITE)
+        titleTv.textSize = 13.5f
+        titleTv.setTypeface(titleTv.typeface, android.graphics.Typeface.BOLD)
+        titleTv.maxLines = 1; titleTv.ellipsize = TextUtils.TruncateAt.END
 
-        actionRow.orientation = LinearLayout.HORIZONTAL
-        actionRow.gravity = Gravity.CENTER
+        bodyTv.setTextColor(0xFFB2B2BA.toInt())
+        bodyTv.textSize = 12f; bodyTv.maxLines = 2; bodyTv.ellipsize = TextUtils.TruncateAt.END
+        // 3 dp top margin so title and body never crowd each other
+        (LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(3) })
+            .let { bodyTv.layoutParams = it }
 
-        pill.addView(
-            header,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
-        val ap = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-        ap.topMargin = dp(8)
-        pill.addView(actionRow, ap)
+        subTv.setTextColor(0xFF8E8E98.toInt())
+        subTv.textSize = 11f; subTv.maxLines = 1; subTv.ellipsize = TextUtils.TruncateAt.END
+        (LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(2) })
+            .let { subTv.layoutParams = it }
 
-        pill.setOnTouchListener { _, ev -> handleTouch(ev) }
-        addView(
-            pill,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            )
-        )
+        chron.setTextColor(Color.rgb(52,199,89)); chron.textSize = 13f
+
+        // ── progress bar ──
+        pBarH.max = 100
+        pBarH.progressDrawable?.setColorFilter(Color.rgb(34,211,238),
+            android.graphics.PorterDuff.Mode.SRC_IN)
+
+        // ── nav row ──
+        navRow.orientation = LinearLayout.HORIZONTAL; navRow.gravity = Gravity.CENTER_VERTICAL
+        navIcon.scaleType = ImageView.ScaleType.CENTER_INSIDE
+        navDist.setTextColor(Color.WHITE); navDist.textSize = 13f
+        navDist.setTypeface(navDist.typeface, android.graphics.Typeface.BOLD)
+        navRow.addView(navIcon, LinearLayout.LayoutParams(dp(20), dp(20)))
+        val ndLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).also { it.marginStart = dp(5) }
+        navRow.addView(navDist, ndLp)
+
+        // ── centre column ──
+        colView.orientation = LinearLayout.VERTICAL
+        colView.addView(titleTv, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        colView.addView(bodyTv)
+        colView.addView(subTv)
+        colView.addView(chron, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(2) })
+        colView.addView(pBarH, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(4)).also { it.topMargin = dp(4) })
+        colView.addView(navRow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(2) })
+
+        // ── right accessories ──
+        accTv.setTextColor(Color.WHITE); accTv.textSize = 13f
+        accTv.setTypeface(accTv.typeface, android.graphics.Typeface.BOLD)
+
+        // ── action row ──
+        actRow.orientation = LinearLayout.HORIZONTAL; actRow.gravity = Gravity.CENTER
+
+        // ── header row: icon | col | accessories ──
+        val hRow = LinearLayout(ctx)
+        hRow.orientation = LinearLayout.HORIZONTAL; hRow.gravity = Gravity.CENTER_VERTICAL
+
+        // icon box — 30 dp square so it never touches the title
+        val iconLp = LinearLayout.LayoutParams(dp(30), dp(30))
+        hRow.addView(icon, iconLp)
+
+        // centre col with 10 dp margins left/right for clear separation
+        val colLp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        colLp.marginStart = dp(10); colLp.marginEnd = dp(8)
+        hRow.addView(colView, colLp)
+
+        // right accessories stacked in a tiny FrameLayout
+        val rightBox = FrameLayout(ctx)
+        val accSize  = dp(28)
+        rightBox.addView(eqView,   FrameLayout.LayoutParams(dp(22), dp(16)).also { it.gravity = Gravity.CENTER })
+        rightBox.addView(waveView, FrameLayout.LayoutParams(dp(28), dp(18)).also { it.gravity = Gravity.CENTER })
+        rightBox.addView(rProg,    FrameLayout.LayoutParams(dp(26), dp(26)).also { it.gravity = Gravity.CENTER })
+        rightBox.addView(scanRing, FrameLayout.LayoutParams(dp(30), dp(30)).also { it.gravity = Gravity.CENTER })
+        rightBox.addView(accTv,    FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).also { it.gravity = Gravity.CENTER })
+        rightBox.addView(dot,      FrameLayout.LayoutParams(dp(10), dp(10)).also { it.gravity = Gravity.CENTER })
+        hRow.addView(rightBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // ── assemble pill ──
+        pill.addView(hRow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val actLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        actLp.topMargin = dp(10)
+        pill.addView(actRow, actLp)
+
+        // ── touch ──
+        pill.setOnTouchListener { _, ev -> onTouch(ev); true }
+
+        addView(pill, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL))
     }
 
-    private fun handleTouch(ev: MotionEvent): Boolean {
+    // ── Gestures ─────────────────────────────────────────────────────────────
+
+    private fun onTouch(ev: MotionEvent) {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downY = ev.rawY
-                downT = ev.eventTime
+                downX = ev.rawX; downY = ev.rawY; downT = ev.eventTime; isLong = false
+                postDelayed(longCb, 500)
             }
             MotionEvent.ACTION_UP -> {
-                val dy = ev.rawY - downY
-                if (dy < -dp(20)) {
-                    c.onSwipeUp()
-                } else if (abs(dy) < dp(14)) {
-                    if (ev.eventTime - downT > 500) c.onOpen() else c.onTap()
+                removeCallbacks(longCb)
+                if (isLong) return
+                val dx = ev.rawX - downX; val dy = ev.rawY - downY; val dt = ev.eventTime - downT
+                when {
+                    abs(dx) > dp(28) && abs(dx) > abs(dy) ->
+                        if (dx < 0) c.onSwipeLeft() else c.onSwipeRight()
+                    dy < -dp(20) -> c.onSwipeUp()
+                    abs(dx) < dp(12) && abs(dy) < dp(12) && dt < 400 -> c.onTap()
                 }
             }
+            MotionEvent.ACTION_CANCEL -> removeCallbacks(longCb)
         }
-        return true
     }
 
-    // ---- content -----------------------------------------------------------------------------
+    // ── Bind ─────────────────────────────────────────────────────────────────
 
     fun bind(e: IslandEvent, expanded: Boolean) {
-        title.text = e.title
-        body.text = e.text ?: ""
-
-        val ic = e.icon
-        if (ic != null) {
-            icon.setImageDrawable(ic)
-            icon.clearColorFilter()
-            icon.visibility = View.VISIBLE
-        } else if (e.iconRes != 0) {
-            icon.setImageResource(e.iconRes)
-            if (e.iconTint != 0) icon.setColorFilter(e.iconTint) else icon.clearColorFilter()
-            icon.visibility = View.VISIBLE
-        } else {
-            icon.visibility = View.GONE
-        }
-
-        accessory.removeAllViews()
-        if (e.chronoBase != 0L) {
-            val ch = Chronometer(context)
-            ch.setTextColor(Color.rgb(52, 199, 89))
-            ch.textSize = 13f
-            ch.base = e.chronoBase
-            ch.start()
-            accessory.addView(ch)
-        } else if (e.equalizer) {
-            accessory.addView(EqualizerView(context), FrameLayout.LayoutParams(dp(22), dp(16)))
-        } else if (!e.accessoryText.isNullOrEmpty()) {
-            val t = TextView(context)
-            t.text = e.accessoryText
-            t.textSize = 13f
-            t.setTypeface(t.typeface, Typeface.BOLD)
-            t.setTextColor(e.accessoryColor)
-            accessory.addView(t)
-        }
-        accessory.visibility = if (accessory.childCount > 0) View.VISIBLE else View.GONE
-
-        actionRow.removeAllViews()
-        for (a in e.actions) actionRow.addView(buildAction(a))
-
-        // Measure the target size
-        val dm = context.resources.displayMetrics
-        applyVisibility(e, expanded)
-        val maxW = if (expanded) min(dm.widthPixels - dp(32), dp(420)) else (dm.widthPixels * 0.72f).toInt()
+        applyContent(e, expanded)
+        val dm   = context.resources.displayMetrics
+        val maxW = if (expanded) minOf(dm.widthPixels - dp(32), dp(440))
+                   else (dm.widthPixels * 0.74f).toInt()
         pill.measure(
-            View.MeasureSpec.makeMeasureSpec(
-                maxW,
-                if (expanded) View.MeasureSpec.EXACTLY else View.MeasureSpec.AT_MOST
-            ),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-        )
-        val tw = pill.measuredWidth
-        val th = pill.measuredHeight
-
-        val p = pill.layoutParams as FrameLayout.LayoutParams
+            MeasureSpec.makeMeasureSpec(maxW,
+                if (expanded) MeasureSpec.EXACTLY else MeasureSpec.AT_MOST),
+            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        val tw = pill.measuredWidth; val th = pill.measuredHeight
+        val p  = pill.layoutParams as FrameLayout.LayoutParams
         if (!shown) {
-            p.width = tw
-            p.height = th
-            pill.layoutParams = p
-            setRadius(th)
-            shown = true
+            p.width = tw; p.height = th; pill.layoutParams = p; setRadius(th); shown = true
         } else {
             val collapsing = curExpanded && !expanded
-            if (collapsing) applyVisibility(e, true) // keep content visible while shrinking
-            animateTo(tw, th) {
-                if (collapsing) applyVisibility(e, false)
-            }
+            if (collapsing) applyContent(e, true)
+            animateTo(tw, th) { if (collapsing) applyContent(e, false) }
         }
         curExpanded = expanded
     }
 
-    private fun applyVisibility(e: IslandEvent, expanded: Boolean) {
-        body.visibility = if (expanded && !e.text.isNullOrEmpty()) View.VISIBLE else View.GONE
-        actionRow.visibility = if (expanded && e.actions.isNotEmpty()) View.VISIBLE else View.GONE
+    private fun applyContent(e: IslandEvent, exp: Boolean) {
+        // reset every sub-view
+        icon.visibility     = View.GONE
+        bodyTv.visibility   = View.GONE
+        subTv.visibility    = View.GONE
+        chron.visibility    = View.GONE; chron.stop(); chron.isCountDown = false
+        pBarH.visibility    = View.GONE
+        navRow.visibility   = View.GONE
+        eqView.visibility   = View.GONE
+        waveView.visibility = View.GONE
+        rProg.visibility    = View.GONE
+        scanRing.visibility = View.GONE
+        accTv.visibility    = View.GONE
+        dot.visibility      = View.GONE
+        actRow.removeAllViews(); actRow.visibility = View.GONE
+
+        // icon
+        if (e.icon != null) {
+            icon.setImageDrawable(e.icon); icon.clearColorFilter(); icon.visibility = View.VISIBLE
+        } else if (e.iconRes != 0) {
+            icon.setImageResource(e.iconRes)
+            if (e.iconTint != 0) icon.setColorFilter(e.iconTint) else icon.clearColorFilter()
+            icon.visibility = View.VISIBLE
+        }
+
+        titleTv.text = e.title
+
+        when (e.style) {
+            IslandStyle.CALL -> {
+                showBody(e); showChron(e)
+                waveView.visibility = View.VISIBLE
+                if (exp) showActions(e)
+            }
+            IslandStyle.MEDIA -> {
+                showBody(e)
+                eqView.visibility = View.VISIBLE
+                if (exp) showActions(e)
+            }
+            IslandStyle.NAV -> {
+                if (e.navTurnIcon != 0) navIcon.setImageResource(e.navTurnIcon)
+                navDist.text = e.accessoryText ?: ""; navRow.visibility = View.VISIBLE
+                showBody(e)
+            }
+            IslandStyle.TIMER -> {
+                showChron(e); showBody(e)
+            }
+            IslandStyle.PROGRESS -> {
+                val pct = if (e.progressMax > 0) e.progressVal * 100 / e.progressMax else 0
+                if (exp) {
+                    pBarH.progress = pct; pBarH.visibility = View.VISIBLE
+                } else {
+                    rProg.pct = pct / 100f; rProg.visibility = View.VISIBLE
+                }
+                accTv.text = "$pct%"
+                accTv.setTextColor(Color.rgb(34, 211, 238)); accTv.visibility = View.VISIBLE
+                showBody(e)
+            }
+            IslandStyle.FACE_SCAN, IslandStyle.PAYMENT -> {
+                scanRing.visibility = View.VISIBLE
+                if (e.style == IslandStyle.PAYMENT) {
+                    accTv.text = "✓"; accTv.setTextColor(Color.rgb(52,199,89))
+                    accTv.textSize = 16f; accTv.visibility = View.VISIBLE
+                }
+                showBody(e)
+            }
+            IslandStyle.BT_BATTERY -> {
+                if (e.batteryPct >= 0) {
+                    accTv.text = "${e.batteryPct}%"
+                    accTv.setTextColor(btColor(e.batteryPct)); accTv.visibility = View.VISIBLE
+                }
+                showBody(e)
+            }
+            IslandStyle.PRIVACY -> {
+                dot.visibility = View.VISIBLE
+                showBody(e)
+            }
+            IslandStyle.SPLIT -> {
+                dot.visibility = View.VISIBLE; showBody(e); showChron(e)
+                if (exp) showActions(e)
+            }
+            IslandStyle.HOTSPOT, IslandStyle.LIVE_TILE -> {
+                showBody(e)
+                if (!e.subText.isNullOrEmpty()) {
+                    subTv.text = e.subText; subTv.visibility = View.VISIBLE
+                }
+                if (!e.accessoryText.isNullOrEmpty()) {
+                    accTv.text = e.accessoryText
+                    if (e.accessoryColor != -1) accTv.setTextColor(e.accessoryColor)
+                    accTv.visibility = View.VISIBLE
+                }
+                if (exp) showActions(e)
+            }
+            else -> { // DEFAULT
+                showChron(e)
+                if (!e.accessoryText.isNullOrEmpty()) {
+                    accTv.text = e.accessoryText
+                    if (e.accessoryColor != -1) accTv.setTextColor(e.accessoryColor)
+                    accTv.visibility = View.VISIBLE
+                }
+                showBody(e)
+                if (exp) showActions(e)
+            }
+        }
+    }
+
+    private fun showBody(e: IslandEvent) {
+        if (!e.text.isNullOrEmpty()) { bodyTv.text = e.text; bodyTv.visibility = View.VISIBLE }
+    }
+    private fun showChron(e: IslandEvent) {
+        if (e.chronoBase == 0L) return
+        chron.base = e.chronoBase
+        if (e.chronoCountDown) chron.isCountDown = true
+        chron.start(); chron.visibility = View.VISIBLE
+    }
+    private fun showActions(e: IslandEvent) {
+        if (e.actions.isEmpty()) return
+        e.actions.forEach { actRow.addView(buildAction(it)) }
+        actRow.visibility = View.VISIBLE
+    }
+
+    private fun btColor(pct: Int) = when {
+        pct <= 20 -> Color.rgb(255, 69, 58)
+        pct <= 40 -> Color.rgb(255, 159, 10)
+        else      -> Color.rgb(52, 199, 89)
     }
 
     private fun buildAction(a: IslandAction): View {
-        if (a.iconRes != 0) {
-            val b = ImageView(context)
-            b.setImageResource(a.iconRes)
-            b.setColorFilter(Color.WHITE)
-            b.setPadding(dp(11), dp(11), dp(11), dp(11))
-            val g = GradientDrawable()
-            g.shape = GradientDrawable.OVAL
-            g.setColor(0xFF2C2C2E.toInt())
-            b.background = g
-            b.setOnClickListener { a.onClick() }
-            val lp = LinearLayout.LayoutParams(dp(46), dp(46))
-            lp.marginStart = dp(8)
-            lp.marginEnd = dp(8)
-            b.layoutParams = lp
-            return b
+        return if (a.iconRes != 0) {
+            ImageView(context).apply {
+                setImageResource(a.iconRes); setColorFilter(Color.WHITE)
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                val g = GradientDrawable(); g.shape = GradientDrawable.OVAL
+                g.setColor(0xFF2C2C2E.toInt()); background = g
+                setOnClickListener { a.onClick() }
+                layoutParams = LinearLayout.LayoutParams(dp(44), dp(44)).also {
+                    it.marginStart = dp(6); it.marginEnd = dp(6) }
+            }
+        } else {
+            TextView(context).apply {
+                text = a.label ?: ""; setTextColor(Color.WHITE); textSize = 13.5f
+                gravity = Gravity.CENTER
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(dp(12), 0, dp(12), 0)
+                val g = GradientDrawable(); g.cornerRadius = dp(18).toFloat()
+                g.setColor(if (a.color != 0) a.color else 0xFF2C2C2E.toInt()); background = g
+                setOnClickListener { a.onClick() }
+                layoutParams = LinearLayout.LayoutParams(0, dp(40), 1f).also {
+                    it.marginStart = dp(4); it.marginEnd = dp(4) }
+            }
         }
-        val t = TextView(context)
-        t.text = a.label ?: ""
-        t.setTextColor(Color.WHITE)
-        t.textSize = 14f
-        t.gravity = Gravity.CENTER
-        t.setTypeface(t.typeface, Typeface.BOLD)
-        t.setPadding(dp(14), 0, dp(14), 0)
-        val g = GradientDrawable()
-        g.cornerRadius = dp(20).toFloat()
-        g.setColor(if (a.color != 0) a.color else 0xFF2C2C2E.toInt())
-        t.background = g
-        t.setOnClickListener { a.onClick() }
-        val lp = LinearLayout.LayoutParams(0, dp(40), 1f)
-        lp.marginStart = dp(4)
-        lp.marginEnd = dp(4)
-        t.layoutParams = lp
-        return t
     }
 
-    // ---- animation ---------------------------------------------------------------------------
+    // ── Animations ────────────────────────────────────────────────────────────
 
     private fun setRadius(h: Int) {
-        bg.cornerRadius = min(h / 2f, dp(30).toFloat())
-        pill.invalidateOutline()
+        pillBg.cornerRadius = minOf(h / 2f, dp(30).toFloat()); pill.invalidateOutline()
     }
 
     private fun animateTo(w: Int, h: Int, onDone: () -> Unit) {
-        val old = anim
-        anim = null
-        old?.cancel()
-        val p = pill.layoutParams as FrameLayout.LayoutParams
-        val w0 = p.width
-        val h0 = p.height
-        if (w0 == w && h0 == h) {
-            onDone()
-            return
-        }
+        sizeAnim?.cancel(); sizeAnim = null
+        val p  = pill.layoutParams as FrameLayout.LayoutParams
+        val w0 = p.width; val h0 = p.height
+        if (w0 == w && h0 == h) { onDone(); return }
         val va = ValueAnimator.ofFloat(0f, 1f)
-        va.duration = 340
-        va.interpolator = OvershootInterpolator(0.9f)
+        va.duration = 340; va.interpolator = OvershootInterpolator(0.8f)
         va.addUpdateListener {
             val f = it.animatedValue as Float
-            p.width = (w0 + (w - w0) * f).toInt()
+            p.width  = (w0 + (w - w0) * f).toInt()
             p.height = (h0 + (h - h0) * f).toInt()
-            pill.layoutParams = p
-            setRadius(p.height)
+            pill.layoutParams = p; setRadius(p.height)
         }
         va.addListener(object : AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: Animator) {
-                if (anim !== va) return
-                anim = null
-                p.width = w
-                p.height = h
-                pill.layoutParams = p
-                setRadius(h)
-                onDone()
+            override fun onAnimationEnd(a: Animator) {
+                if (sizeAnim !== va) return; sizeAnim = null
+                p.width = w; p.height = h; pill.layoutParams = p; setRadius(h); onDone()
             }
         })
-        anim = va
-        va.start()
+        sizeAnim = va; va.start()
     }
 
     fun animateIn() {
-        alpha = 0f
-        translationY = -dp(16).toFloat()
+        alpha = 0f; translationY = -dp(14).toFloat()
         animate().alpha(1f).translationY(0f).setDuration(220)
             .setInterpolator(DecelerateInterpolator()).start()
     }
-
     fun animateOut(end: () -> Unit) {
-        anim?.cancel()
-        anim = null
-        animate().alpha(0f).translationY(-dp(10).toFloat()).setDuration(160)
+        sizeAnim?.cancel(); sizeAnim = null
+        animate().alpha(0f).translationY(-dp(8).toFloat()).setDuration(160)
             .withEndAction { end() }.start()
-    }
-}
-
-/** Tiny 3-bar "music is playing" indicator. Ticks at ~11 fps and only while attached. */
-class EqualizerView(ctx: Context) : View(ctx) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var t = 0f
-    private val tick = object : Runnable {
-        override fun run() {
-            t += 0.35f
-            invalidate()
-            postDelayed(this, 90)
-        }
-    }
-
-    init {
-        paint.color = Color.rgb(34, 211, 238)
-    }
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        postDelayed(tick, 90)
-    }
-
-    override fun onDetachedFromWindow() {
-        removeCallbacks(tick)
-        super.onDetachedFromWindow()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val bw = w / 5f
-        for (i in 0..2) {
-            val amp = 0.3f + 0.7f * abs(sin(t + i * 1.7f))
-            val bh = h * amp
-            canvas.drawRoundRect(i * 2 * bw, h - bh, i * 2 * bw + bw, h, bw / 2, bw / 2, paint)
-        }
     }
 }

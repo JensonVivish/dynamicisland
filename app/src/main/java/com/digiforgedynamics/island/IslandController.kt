@@ -13,10 +13,28 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
 
+// ── Event model ──────────────────────────────────────────────────────────────
+
+enum class IslandStyle {
+    DEFAULT,       // standard pill
+    CALL,          // pill with waveform
+    MEDIA,         // pill with equalizer + album art
+    NAV,           // pill with turn icon + distance
+    TIMER,         // pill with countdown chronometer
+    PROGRESS,      // pill with progress bar (download/transfer)
+    PRIVACY,       // privacy dot(s) only
+    SPLIT,         // dominant pill + secondary dot
+    PAYMENT,       // payment confirmation animation
+    FACE_SCAN,     // face-id style expand
+    BT_BATTERY,    // Bluetooth accessory battery
+    HOTSPOT,       // hotspot/sharing indicator
+    LIVE_TILE      // ride-share / food / sports / flight
+}
+
 data class IslandAction(
     val label: String?,
-    val iconRes: Int,
-    val color: Int,
+    val iconRes: Int = 0,
+    val color: Int = 0,
     val onClick: () -> Unit
 )
 
@@ -24,13 +42,24 @@ data class IslandEvent(
     val key: String,
     val title: String,
     val text: String? = null,
+    val subText: String? = null,
     val icon: Drawable? = null,
     val iconRes: Int = 0,
     val iconTint: Int = 0,
+    val style: IslandStyle = IslandStyle.DEFAULT,
+    // accessory
     val accessoryText: String? = null,
     val accessoryColor: Int = -1,
-    val chronoBase: Long = 0L,
-    val equalizer: Boolean = false,
+    val chronoBase: Long = 0L,           // for call timer / countdown
+    val chronoCountDown: Boolean = false,
+    val progressMax: Int = 0,
+    val progressVal: Int = 0,
+    val batteryPct: Int = -1,            // for BT battery
+    val navTurnIcon: Int = 0,            // drawable res for turn arrow
+    // secondary dot (split mode)
+    val dotColor: Int = 0,
+    val dotIconRes: Int = 0,
+    // actions
     val actions: List<IslandAction> = emptyList(),
     val onOpen: (() -> Unit)? = null,
     val sticky: Boolean = false,
@@ -47,6 +76,8 @@ fun firePending(ctx: Context, pi: PendingIntent?) {
     } catch (_: Exception) {}
 }
 
+// ── Controller ───────────────────────────────────────────────────────────────
+
 class IslandController private constructor(private val app: Context) {
 
     companion object {
@@ -57,88 +88,110 @@ class IslandController private constructor(private val app: Context) {
             }
     }
 
-    private val wm = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-    private val h = Handler(Looper.getMainLooper())
+    private val wm  = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val h   = Handler(Looper.getMainLooper())
 
     private var view: IslandView? = null
-    private var lp: WindowManager.LayoutParams? = null
+    private var lp:   WindowManager.LayoutParams? = null
 
-    private var transient: IslandEvent? = null
-    private var media: IslandEvent? = null
-    private var mediaHidden = false
-    private var lastMediaKey = ""
-    private var expanded = false
-    private val dismissed = HashSet<String>()
+    // event slots
+    private var transient: IslandEvent? = null   // highest priority — notifications, calls, etc.
+    private var persistent: IslandEvent? = null  // media, nav — stays until cleared
+    private var privacyEvt: IslandEvent? = null  // camera/mic dot
+
+    private var expanded       = false
+    private var mediaHidden    = false
+    private var lastMediaKey   = ""
+    private val dismissed      = HashSet<String>()
 
     private val timeout = Runnable { onTimeout() }
 
-    fun show(e: IslandEvent, ms: Long) {
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /** Show a transient event (auto-dismisses after [ms] ms unless sticky). */
+    fun show(e: IslandEvent, ms: Long = Prefs.holdMs(app)) {
         h.post {
             if (dismissed.contains(e.key)) return@post
             transient = e
-            expanded = e.startExpanded
+            expanded  = e.startExpanded
             h.removeCallbacks(timeout)
             if (!e.sticky && ms > 0) h.postDelayed(timeout, ms)
             render()
         }
     }
 
-    fun remove(key: String) {
-        h.post {
-            dismissed.remove(key)
-            if (transient?.key == key) {
-                transient = null
-                expanded = false
-                h.removeCallbacks(timeout)
-                render()
-            }
-        }
-    }
-
-    fun setMedia(e: IslandEvent?) {
+    /** Set a persistent background event (media, navigation). Pass null to clear. */
+    fun setPersistent(e: IslandEvent?) {
         h.post {
             if (e == null) {
-                media = null; lastMediaKey = ""; mediaHidden = false
+                if (lastMediaKey.isNotEmpty() && persistent?.key?.startsWith("media:") == true) {
+                    mediaHidden = false; lastMediaKey = ""
+                }
+                persistent = null
             } else {
-                if (e.key != lastMediaKey) { mediaHidden = false; lastMediaKey = e.key }
-                media = e
+                if (e.key != lastMediaKey && e.key.startsWith("media:")) {
+                    mediaHidden = false; lastMediaKey = e.key
+                }
+                persistent = e
             }
             render()
         }
     }
 
-    fun refresh() { h.post { render() } }
+    /** Show/hide privacy dot. */
+    fun setPrivacy(e: IslandEvent?) {
+        h.post { privacyEvt = e; render() }
+    }
 
+    fun remove(key: String) {
+        h.post {
+            dismissed.remove(key)
+            if (transient?.key == key) {
+                transient = null; expanded = false
+                h.removeCallbacks(timeout)
+            }
+            if (persistent?.key == key) persistent = null
+            render()
+        }
+    }
+
+    fun refresh()       { h.post { render() } }
     fun applySettings() {
         h.post {
             val v = view ?: return@post
-            val p = lp ?: return@post
+            val p = lp   ?: return@post
             applyPos(p)
             try { wm.updateViewLayout(v, p) } catch (_: Exception) {}
         }
     }
+
+    // ── Gesture callbacks (called from IslandView) ────────────────────────────
 
     fun onTap() {
         val cur = current() ?: return
         if (!expanded && cur.expandable) {
             expanded = true
             h.removeCallbacks(timeout)
-            h.postDelayed(timeout, 7000)
+            h.postDelayed(timeout, 8000)
             render()
         } else {
-            onOpen()
+            cur.onOpen?.invoke()
+            if (cur === transient && !cur.sticky) {
+                transient = null; h.removeCallbacks(timeout)
+            }
+            expanded = false
+            render()
         }
     }
 
-    fun onOpen() {
+    fun onLongPress() {
         val cur = current() ?: return
-        cur.onOpen?.invoke()
-        if (cur === transient && !cur.sticky) {
-            transient = null
+        if (!expanded) {
+            expanded = true
             h.removeCallbacks(timeout)
+            h.postDelayed(timeout, 12000) // stay longer on long-press expand
+            render()
         }
-        expanded = false
-        render()
     }
 
     fun onSwipeUp() {
@@ -146,20 +199,27 @@ class IslandController private constructor(private val app: Context) {
         if (expanded) {
             expanded = false
             if (cur === transient && !cur.sticky) {
-                h.removeCallbacks(timeout)
-                h.postDelayed(timeout, 1200)
+                h.removeCallbacks(timeout); h.postDelayed(timeout, 1500)
             }
         } else if (cur === transient) {
             if (cur.sticky) dismissed.add(cur.key)
-            transient = null
-            h.removeCallbacks(timeout)
+            transient = null; h.removeCallbacks(timeout)
         } else {
-            mediaHidden = true
+            mediaHidden = true // hide media/nav
         }
         render()
     }
 
-    private fun current(): IslandEvent? = transient ?: (if (mediaHidden) null else media)
+    fun onSwipeLeft()  { onSwipeUp() }  // horizontal swipe = dismiss
+    fun onSwipeRight() { onSwipeUp() }
+
+    // ── Internal ──────────────────────────────────────────────────────────────
+
+    private fun current(): IslandEvent? {
+        return transient
+            ?: privacyEvt
+            ?: if (mediaHidden) null else persistent
+    }
 
     private fun onTimeout() {
         val t = transient
@@ -169,12 +229,13 @@ class IslandController private constructor(private val app: Context) {
     }
 
     private fun render() {
-        val cur = current()
-        val landscape =
-            app.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        if (cur == null || !Prefs.enabled(app) || (landscape && Prefs.hideLandscape(app))) {
+        val landscape = app.resources.configuration.orientation ==
+            Configuration.ORIENTATION_LANDSCAPE
+        if (!Prefs.enabled(app) || (landscape && Prefs.hideLandscape(app))) {
             expanded = false; detach(); return
         }
+        val cur = current()
+        if (cur == null) { expanded = false; detach(); return }
         val v = view ?: attach() ?: return
         v.bind(cur, expanded)
     }
@@ -189,6 +250,7 @@ class IslandController private constructor(private val app: Context) {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         )
@@ -196,6 +258,10 @@ class IslandController private constructor(private val app: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             p.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        // Keep above system UI — prevents notifications covering us
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            p.alpha = 1.0f
         }
         p.title = "DigiIsland"
         applyPos(p)
@@ -210,9 +276,7 @@ class IslandController private constructor(private val app: Context) {
     private fun detach() {
         val v = view ?: return
         view = null; lp = null
-        v.animateOut {
-            try { wm.removeViewImmediate(v) } catch (_: Exception) {}
-        }
+        v.animateOut { try { wm.removeViewImmediate(v) } catch (_: Exception) {} }
     }
 
     private fun applyPos(p: WindowManager.LayoutParams) {
