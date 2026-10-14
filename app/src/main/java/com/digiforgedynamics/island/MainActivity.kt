@@ -42,7 +42,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshers.forEach { it() }
-        if (Prefs.enabled(this) && Settings.canDrawOverlays(this)) startSvc()
+        startSvc()
     }
 
     private fun buildUI(root: LinearLayout) {
@@ -106,6 +106,9 @@ class MainActivity : Activity() {
         swRow(root, "Navigation (Maps / Waze)",  Prefs.NAV,          true)
         swRow(root, "Live tiles (Uber, Swiggy, flights…)", Prefs.LIVE_TILES, true)
         swRow(root, "Hide in landscape",         Prefs.HIDE_LANDSCAPE, true)
+        swRow(root, "Extra keep-alive (adds a silent notification)", Prefs.KEEP_ALIVE, false) { on ->
+            if (on) startSvc() else stopService(Intent(this, KeepAliveService::class.java))
+        }
 
         // ── Position ──────────────────────────────────────────────────────
         section(root, "POSITION")
@@ -185,6 +188,7 @@ class MainActivity : Activity() {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun startSvc() {
+        if (!Prefs.enabled(this) || !Prefs.keepAlive(this) || !Settings.canDrawOverlays(this)) return
         try { startForegroundService(Intent(this, KeepAliveService::class.java)) }
         catch (_: Exception) {}
     }

@@ -15,6 +15,7 @@ object Prefs {
     const val TOP            = "top_dp"
     const val X              = "x_dp"
     const val HOLD           = "hold_s"
+    const val KEEP_ALIVE     = "keep_alive"
 
     private fun sp(c: Context) =
         c.applicationContext.getSharedPreferences("island", Context.MODE_PRIVATE)
@@ -24,6 +25,7 @@ object Prefs {
     fun int(c: Context, k: String, d: Int): Int = sp(c).getInt(k, d)
     fun setInt(c: Context, k: String, v: Int) { sp(c).edit().putInt(k, v).apply() }
 
+    fun keepAlive(c: Context)    = bool(c, KEEP_ALIVE, false)
     fun enabled(c: Context)      = bool(c, ENABLED)
     fun notifs(c: Context)       = bool(c, NOTIFS)
     fun media(c: Context)        = bool(c, MEDIA)

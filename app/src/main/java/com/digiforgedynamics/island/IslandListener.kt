@@ -24,13 +24,14 @@ class IslandListener : NotificationListenerService() {
     private var privacy: PrivacyWatcher? = null
     private var btWatcher: BluetoothWatcher? = null
     private var dlWatcher: DownloadWatcher? = null
+    private var pwWatcher: PowerWatcher? = null
 
     private val sessionsListener =
         MediaSessionManager.OnActiveSessionsChangedListener { list -> updateSessions(list) }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        if (Prefs.enabled(this)) {
+        if (Prefs.enabled(this) && Prefs.keepAlive(this)) {
             try { startForegroundService(Intent(this, KeepAliveService::class.java)) }
             catch (_: Exception) {}
         }
@@ -45,6 +46,12 @@ class IslandListener : NotificationListenerService() {
         privacy   = PrivacyWatcher(this).also { it.start() }
         btWatcher = BluetoothWatcher(this).also { it.start() }
         dlWatcher = DownloadWatcher(this).also { it.start() }
+        pwWatcher = PowerWatcher(this).also { it.start() }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        IslandController.get(this).refresh()
     }
 
     override fun onListenerDisconnected() {
@@ -53,6 +60,7 @@ class IslandListener : NotificationListenerService() {
         privacy?.stop();   privacy   = null
         btWatcher?.stop(); btWatcher = null
         dlWatcher?.stop(); dlWatcher = null
+        pwWatcher?.stop(); pwWatcher = null
         IslandController.get(this).setPersistent(null)
         super.onListenerDisconnected()
     }
