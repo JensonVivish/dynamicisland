@@ -78,10 +78,6 @@ class MainActivity : Activity() {
         ) { go(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                 Uri.parse("package:$packageName"))) }
 
-        permRow(root, "Do Not Disturb access",
-            "Suppress system notification banners while island is showing",
-            { nm().isNotificationPolicyAccessGranted }
-        ) { go(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) }
 
         // hint for sideloaded apps
         val hint = card()

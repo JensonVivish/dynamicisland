@@ -10,14 +10,6 @@
     <!-- Bluetooth accessory battery -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- Download progress watcher -->
-    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
-    <!-- Privacy dot: detect camera/mic usage -->
-    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
-        tools:ignore="ProtectedPermissions"
-        xmlns:tools="http://schemas.android.com/tools"/>
-    <!-- DND: suppress system notifications while island is showing -->
-    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
     <queries>
         <intent>

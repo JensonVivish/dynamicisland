@@ -106,16 +106,7 @@ class BluetoothWatcher(private val ctx: Context) {
         )
     }
 
-    @Suppress("MissingPermission")
-    private fun btBattery(dev: BluetoothDevice?): Int {
-        dev ?: return -1
-        return try {
-            val m = ctx.getSystemService(BluetoothManager::class.java)
-            // Reflect on BluetoothDevice.getBatteryLevel() (hidden API, works on most OEMs)
-            val method = dev.javaClass.getMethod("getBatteryLevel")
-            (method.invoke(dev) as? Int) ?: -1
-        } catch (_: Exception) { -1 }
-    }
+    private fun btBattery(dev: BluetoothDevice?): Int = -1
 
     companion object {
         private const val ACTION_BT_BATTERY   = "android.bluetooth.device.action.BATTERY_LEVEL_CHANGED"
