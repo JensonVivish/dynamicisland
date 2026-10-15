@@ -2,6 +2,9 @@ package com.digiforgedynamics.island
 
 import android.app.Notification
 import android.app.NotificationManager
+import android.app.RemoteInput
+import android.media.AudioManager
+import android.os.Bundle
 import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Bitmap
@@ -17,7 +20,8 @@ import android.service.notification.StatusBarNotification
 
 class IslandListener : NotificationListenerService() {
 
-    private val seen    = HashMap<String, Int>()
+    private val seen = HashMap<String, Int>()
+    private val cancelled = HashSet<String>()
     private var sessions: List<MediaController> = emptyList()
     private val watched = ArrayList<Pair<MediaController, MediaController.Callback>>()
     private var msm: MediaSessionManager? = null
@@ -47,6 +51,7 @@ class IslandListener : NotificationListenerService() {
         btWatcher = BluetoothWatcher(this).also { it.start() }
         dlWatcher = DownloadWatcher(this).also { it.start() }
         pwWatcher = PowerWatcher(this).also { it.start() }
+        IslandController.get(this).refresh()
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
@@ -73,6 +78,7 @@ class IslandListener : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?,
                                        rm: RankingMap?, reason: Int) {
         sbn ?: return
+        if (cancelled.remove(sbn.key)) return
         seen.remove(sbn.key)
         IslandController.get(this).remove(sbn.key)
     }
@@ -84,7 +90,10 @@ class IslandListener : NotificationListenerService() {
         val pkg = sbn.packageName
         if (pkg == packageName || Prefs.isBlocked(this, pkg)) return
         val n = sbn.notification
-        if ((n.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
+        if ((n.flags and Notification.FLAG_GROUP_SUMMARY) != 0) {
+            if (Prefs.replaceSys(this)) cancelIt(sbn.key)
+            return
+        }
 
         val ex  = n.extras
         val cat = n.category
@@ -119,6 +128,7 @@ class IslandListener : NotificationListenerService() {
         if (!isCall && seen[sbn.key] == sig) return
         seen[sbn.key] = sig
         if (seen.size > 300) seen.clear()
+        NotifHistory.add((if (title.isNullOrEmpty()) label else title) + (if (text.isNullOrEmpty()) "" else ": " + text))
 
         var icon: Drawable? = null
         try { icon = n.getLargeIcon()?.loadDrawable(this) } catch (_: Exception) {}
@@ -147,6 +157,25 @@ class IslandListener : NotificationListenerService() {
             acts.add(IslandAction(t, 0, col) { firePending(this, pi); ctl.remove(sbn.key) })
         }
 
+        var replyFn: ((String) -> Unit)? = null
+        if (!isCall) {
+            val ra = n.actions?.firstOrNull { it.actionIntent != null && !it.remoteInputs.isNullOrEmpty() }
+            if (ra != null) {
+                val ris = ra.remoteInputs
+                val rpi = ra.actionIntent
+                replyFn = { reply ->
+                    try {
+                        val i = Intent()
+                        val b = Bundle()
+                        for (ri in ris) b.putCharSequence(ri.resultKey, reply)
+                        RemoteInput.addResultsToIntent(ris, i, b)
+                        rpi.send(this, 0, i)
+                    } catch (ex: Exception) {
+                    }
+                }
+            }
+        }
+        if (ongoingCall) acts.addAll(0, callControls(sbn))
         val style = if (isCall) IslandStyle.CALL else IslandStyle.DEFAULT
         ctl.show(
             IslandEvent(
@@ -157,14 +186,35 @@ class IslandListener : NotificationListenerService() {
                 style        = style,
                 chronoBase   = chronoBase,
                 actions      = acts,
+                onReply      = replyFn,
                 onOpen       = { firePending(this, n.contentIntent) },
                 sticky       = isCall,
                 startExpanded= if (isCall) !ongoingCall else !text.isNullOrEmpty()
             ), Prefs.holdMs(this)
         )
+        if (!isCall && Prefs.replaceSys(this)) cancelIt(sbn.key)
     }
 
     // ── Live-tile detection (navigation, ride-share, food, flight) ────────────
+
+    private fun cancelIt(key: String) {
+        cancelled.add(key)
+        if (cancelled.size > 200) cancelled.clear()
+        try { cancelNotification(key) } catch (ex: Exception) { cancelled.remove(key) }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun callControls(sbn: StatusBarNotification): List<IslandAction> {
+        val a = getSystemService(AudioManager::class.java)
+        return listOf(
+            IslandAction(if (a.isMicrophoneMute) "Unmute" else "Mute") {
+                try { a.isMicrophoneMute = !a.isMicrophoneMute; handle(sbn) } catch (ex: Exception) {}
+            },
+            IslandAction(if (a.isSpeakerphoneOn) "Speaker off" else "Speaker") {
+                try { a.isSpeakerphoneOn = !a.isSpeakerphoneOn; handle(sbn) } catch (ex: Exception) {}
+            }
+        )
+    }
 
     private fun handleLiveTile(sbn: StatusBarNotification) {
         if (!Prefs.liveTiles(this)) return

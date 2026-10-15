@@ -13,22 +13,9 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
 
-// ── Event model ──────────────────────────────────────────────────────────────
-
 enum class IslandStyle {
-    DEFAULT,       // standard pill
-    CALL,          // pill with waveform
-    MEDIA,         // pill with equalizer + album art
-    NAV,           // pill with turn icon + distance
-    TIMER,         // pill with countdown chronometer
-    PROGRESS,      // pill with progress bar (download/transfer)
-    PRIVACY,       // privacy dot(s) only
-    SPLIT,         // dominant pill + secondary dot
-    PAYMENT,       // payment confirmation animation
-    FACE_SCAN,     // face-id style expand
-    BT_BATTERY,    // Bluetooth accessory battery
-    HOTSPOT,       // hotspot/sharing indicator
-    LIVE_TILE      // ride-share / food / sports / flight
+    DEFAULT, CALL, MEDIA, NAV, TIMER, PROGRESS, PRIVACY, SPLIT, PAYMENT,
+    FACE_SCAN, BT_BATTERY, HOTSPOT, LIVE_TILE, IDLE, MENU
 }
 
 data class IslandAction(
@@ -47,25 +34,25 @@ data class IslandEvent(
     val iconRes: Int = 0,
     val iconTint: Int = 0,
     val style: IslandStyle = IslandStyle.DEFAULT,
-    // accessory
     val accessoryText: String? = null,
     val accessoryColor: Int = -1,
-    val chronoBase: Long = 0L,           // for call timer / countdown
+    val chronoBase: Long = 0L,
     val chronoCountDown: Boolean = false,
     val progressMax: Int = 0,
     val progressVal: Int = 0,
-    val batteryPct: Int = -1,            // for BT battery
-    val navTurnIcon: Int = 0,            // drawable res for turn arrow
-    // secondary dot (split mode)
+    val batteryPct: Int = -1,
+    val navTurnIcon: Int = 0,
     val dotColor: Int = 0,
     val dotIconRes: Int = 0,
-    // actions
     val actions: List<IslandAction> = emptyList(),
     val onOpen: (() -> Unit)? = null,
+    val onReply: ((String) -> Unit)? = null,
     val sticky: Boolean = false,
-    val startExpanded: Boolean = false
+    val startExpanded: Boolean = false,
+    val userInitiated: Boolean = false
 ) {
-    val expandable: Boolean get() = actions.isNotEmpty() || !text.isNullOrEmpty()
+    val expandable: Boolean
+        get() = actions.isNotEmpty() || !text.isNullOrEmpty() || onReply != null
 }
 
 fun firePending(ctx: Context, pi: PendingIntent?) {
@@ -73,64 +60,73 @@ fun firePending(ctx: Context, pi: PendingIntent?) {
     try {
         val opts = ActivityOptions.makeBasic()
         pi.send(ctx, 0, null, null, null, null, opts.toBundle())
-    } catch (_: Exception) {}
+    } catch (e: Exception) {
+    }
 }
-
-// ── Controller ───────────────────────────────────────────────────────────────
 
 class IslandController private constructor(private val app: Context) {
 
     companion object {
-        @Volatile private var inst: IslandController? = null
+        @Volatile
+        private var inst: IslandController? = null
         fun get(c: Context): IslandController =
             inst ?: synchronized(this) {
                 inst ?: IslandController(c.applicationContext).also { inst = it }
             }
     }
 
-    private val wm  = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-    private val h   = Handler(Looper.getMainLooper())
+    private val wm = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val h = Handler(Looper.getMainLooper())
 
     private var view: IslandView? = null
-    private var lp:   WindowManager.LayoutParams? = null
+    private var lp: WindowManager.LayoutParams? = null
 
-    // event slots
-    private var transient: IslandEvent? = null   // highest priority — notifications, calls, etc.
-    private var persistent: IslandEvent? = null  // media, nav — stays until cleared
-    private var privacyEvt: IslandEvent? = null  // camera/mic dot
+    private var transient: IslandEvent? = null
+    private var ongoing: IslandEvent? = null     // timer / stopwatch
+    private var persistent: IslandEvent? = null  // media
+    private var privacyEvt: IslandEvent? = null
+    private val idleEvt = IslandEvent(key = "idle", title = "", style = IslandStyle.IDLE)
 
-    private var expanded       = false
-    private var mediaHidden    = false
-    private var lastMediaKey   = ""
-    private val dismissed      = HashSet<String>()
+    private var expanded = false
+    private var mediaHidden = false
+    private var lastMediaKey = ""
+    private var lastIdle = true
+    private val dismissed = HashSet<String>()
+
+    var typing = false
+        private set
 
     private val timeout = Runnable { onTimeout() }
 
-    // ── Public API ────────────────────────────────────────────────────────────
+    // ---- public API ---------------------------------------------------------------------
 
-    /** Show a transient event (auto-dismisses after [ms] ms unless sticky). */
     fun show(e: IslandEvent, ms: Long = Prefs.holdMs(app)) {
         h.post {
-            if (dismissed.contains(e.key)) return@post
+            if (!e.userInitiated && dismissed.contains(e.key)) return@post
+            val same = transient?.key == e.key
+            if (!same && typing) endTypingInternal()
             transient = e
-            expanded  = e.startExpanded
+            if (!same) expanded = e.startExpanded
             h.removeCallbacks(timeout)
-            if (!e.sticky && ms > 0) h.postDelayed(timeout, ms)
+            if (!e.sticky && ms > 0 && !typing) h.postDelayed(timeout, ms)
             render()
         }
     }
 
-    /** Set a persistent background event (media, navigation). Pass null to clear. */
+    fun setOngoing(e: IslandEvent?) {
+        h.post { ongoing = e; render() }
+    }
+
     fun setPersistent(e: IslandEvent?) {
         h.post {
             if (e == null) {
-                if (lastMediaKey.isNotEmpty() && persistent?.key?.startsWith("media:") == true) {
-                    mediaHidden = false; lastMediaKey = ""
-                }
                 persistent = null
+                mediaHidden = false
+                lastMediaKey = ""
             } else {
                 if (e.key != lastMediaKey && e.key.startsWith("media:")) {
-                    mediaHidden = false; lastMediaKey = e.key
+                    mediaHidden = false
+                    lastMediaKey = e.key
                 }
                 persistent = e
             }
@@ -138,7 +134,6 @@ class IslandController private constructor(private val app: Context) {
         }
     }
 
-    /** Show/hide privacy dot. */
     fun setPrivacy(e: IslandEvent?) {
         h.post { privacyEvt = e; render() }
     }
@@ -147,28 +142,98 @@ class IslandController private constructor(private val app: Context) {
         h.post {
             dismissed.remove(key)
             if (transient?.key == key) {
-                transient = null; expanded = false
+                if (typing) endTypingInternal()
+                transient = null
+                expanded = false
                 h.removeCallbacks(timeout)
             }
+            if (ongoing?.key == key) ongoing = null
             if (persistent?.key == key) persistent = null
             render()
         }
     }
 
-    fun refresh()       { h.post { render() } }
+    fun refresh() { h.post { render() } }
+
     fun applySettings() {
         h.post {
-            val v = view ?: return@post
-            val p = lp   ?: return@post
-            applyPos(p)
-            try { wm.updateViewLayout(v, p) } catch (_: Exception) {}
+            val v = view
+            val p = lp
+            if (v != null && p != null) {
+                applyPos(p, lastIdle)
+                try { wm.updateViewLayout(v, p) } catch (e: Exception) {}
+            }
+            render()
         }
     }
 
-    // ── Gesture callbacks (called from IslandView) ────────────────────────────
+    // ---- typing (reply box) -------------------------------------------------------------
+
+    fun beginTyping() {
+        h.post {
+            if (typing || transient == null) return@post
+            typing = true
+            setFocusable(true)
+            h.removeCallbacks(timeout)
+            render()
+        }
+    }
+
+    fun endTyping() {
+        h.post {
+            endTypingInternal()
+            render()
+        }
+    }
+
+    fun sendReply(text: String) {
+        h.post {
+            val cur = transient
+            endTypingInternal()
+            cur?.onReply?.invoke(text)
+            if (cur != null) {
+                transient = null
+                expanded = false
+            }
+            h.removeCallbacks(timeout)
+            render()
+        }
+    }
+
+    private fun endTypingInternal() {
+        if (!typing) return
+        typing = false
+        view?.hideKeyboard()
+        setFocusable(false)
+        h.removeCallbacks(timeout)
+        val t = transient
+        if (t != null && !t.sticky) h.postDelayed(timeout, 4000)
+    }
+
+    private fun setFocusable(on: Boolean) {
+        val v = view ?: return
+        val p = lp ?: return
+        if (on) {
+            p.flags = p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
+        } else {
+            p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED
+        }
+        try { wm.updateViewLayout(v, p) } catch (e: Exception) {}
+    }
+
+    // ---- gestures -----------------------------------------------------------------------
 
     fun onTap() {
-        val cur = current() ?: return
+        if (typing) return
+        val cur = current()
+        if (cur == null) {
+            QuickMenu.open(app)
+            return
+        }
+        if (cur.style == IslandStyle.MENU) return
         if (!expanded && cur.expandable) {
             expanded = true
             h.removeCallbacks(timeout)
@@ -177,7 +242,8 @@ class IslandController private constructor(private val app: Context) {
         } else {
             cur.onOpen?.invoke()
             if (cur === transient && !cur.sticky) {
-                transient = null; h.removeCallbacks(timeout)
+                transient = null
+                h.removeCallbacks(timeout)
             }
             expanded = false
             render()
@@ -185,41 +251,56 @@ class IslandController private constructor(private val app: Context) {
     }
 
     fun onLongPress() {
-        val cur = current() ?: return
-        if (!expanded) {
+        if (typing) return
+        val cur = current()
+        if (cur == null) {
+            QuickMenu.open(app)
+            return
+        }
+        if (!expanded && cur.expandable) {
             expanded = true
             h.removeCallbacks(timeout)
-            h.postDelayed(timeout, 12000) // stay longer on long-press expand
+            h.postDelayed(timeout, 12000)
             render()
         }
     }
 
     fun onSwipeUp() {
+        if (typing) {
+            endTypingInternal()
+            render()
+            return
+        }
         val cur = current() ?: return
-        if (expanded) {
+        if (cur.style == IslandStyle.MENU) {
+            transient = null
+            expanded = false
+            h.removeCallbacks(timeout)
+        } else if (expanded) {
             expanded = false
             if (cur === transient && !cur.sticky) {
-                h.removeCallbacks(timeout); h.postDelayed(timeout, 1500)
+                h.removeCallbacks(timeout)
+                h.postDelayed(timeout, 1500)
             }
         } else if (cur === transient) {
-            if (cur.sticky) dismissed.add(cur.key)
-            transient = null; h.removeCallbacks(timeout)
+            if (cur.sticky && !cur.userInitiated) dismissed.add(cur.key)
+            transient = null
+            h.removeCallbacks(timeout)
+        } else if (cur === ongoing) {
+            ongoing = null
         } else {
-            mediaHidden = true // hide media/nav
+            mediaHidden = true
         }
         render()
     }
 
-    fun onSwipeLeft()  { onSwipeUp() }  // horizontal swipe = dismiss
+    fun onSwipeLeft() { onSwipeUp() }
     fun onSwipeRight() { onSwipeUp() }
 
-    // ── Internal ──────────────────────────────────────────────────────────────
+    // ---- internals ----------------------------------------------------------------------
 
-    private fun current(): IslandEvent? {
-        return transient
-            ?: privacyEvt
-            ?: if (mediaHidden) null else persistent
-    }
+    private fun current(): IslandEvent? =
+        transient ?: ongoing ?: privacyEvt ?: (if (mediaHidden) null else persistent)
 
     private fun onTimeout() {
         val t = transient
@@ -229,18 +310,28 @@ class IslandController private constructor(private val app: Context) {
     }
 
     private fun render() {
-        val landscape = app.resources.configuration.orientation ==
-            Configuration.ORIENTATION_LANDSCAPE
-        if (!Prefs.enabled(app) || (landscape && Prefs.hideLandscape(app))) {
-            expanded = false; detach(); return
+        val landscape =
+            app.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val cur = current() ?: (if (Prefs.idle(app)) idleEvt else null)
+        if (cur == null || !Prefs.enabled(app) || (landscape && Prefs.hideLandscape(app))) {
+            expanded = false
+            detach()
+            return
         }
-        val cur = current()
-        if (cur == null) { expanded = false; detach(); return }
-        val v = view ?: attach() ?: return
-        v.bind(cur, expanded)
+        val idle = cur.style == IslandStyle.IDLE
+        val v = view ?: attach(idle) ?: return
+        if (idle != lastIdle) {
+            lastIdle = idle
+            val p = lp
+            if (p != null) {
+                applyPos(p, idle)
+                try { wm.updateViewLayout(v, p) } catch (e: Exception) {}
+            }
+        }
+        v.bind(cur, if (idle) false else expanded)
     }
 
-    private fun attach(): IslandView? {
+    private fun attach(idle: Boolean): IslandView? {
         if (!Settings.canDrawOverlays(app)) return null
         val v = IslandView(app, this)
         val p = WindowManager.LayoutParams(
@@ -250,7 +341,7 @@ class IslandController private constructor(private val app: Context) {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         )
@@ -259,29 +350,34 @@ class IslandController private constructor(private val app: Context) {
             p.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        // Keep above system UI — prevents notifications covering us
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            p.alpha = 1.0f
-        }
         p.title = "DigiIsland"
-        applyPos(p)
+        lastIdle = idle
+        applyPos(p, idle)
         return try {
             wm.addView(v, p)
-            view = v; lp = p
+            view = v
+            lp = p
             v.animateIn()
             v
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun detach() {
         val v = view ?: return
-        view = null; lp = null
-        v.animateOut { try { wm.removeViewImmediate(v) } catch (_: Exception) {} }
+        view = null
+        lp = null
+        typing = false
+        v.animateOut {
+            try { wm.removeViewImmediate(v) } catch (e: Exception) {}
+        }
     }
 
-    private fun applyPos(p: WindowManager.LayoutParams) {
+    private fun applyPos(p: WindowManager.LayoutParams, idle: Boolean) {
         val d = app.resources.displayMetrics.density
-        p.y = (Prefs.topDp(app) * d).toInt()
+        val top = Prefs.topDp(app) + (if (idle) 0 else Prefs.expDrop(app))
+        p.y = (top * d).toInt()
         p.x = (Prefs.xDp(app) * d).toInt()
     }
 }

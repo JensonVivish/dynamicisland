@@ -16,6 +16,11 @@ object Prefs {
     const val X              = "x_dp"
     const val HOLD           = "hold_s"
     const val KEEP_ALIVE     = "keep_alive"
+    const val IDLE           = "idle_pill"
+    const val IDLE_W         = "idle_w"
+    const val IDLE_H         = "idle_h"
+    const val EXP_DROP       = "exp_drop"
+    const val REPLACE_SYS    = "replace_sys"
 
     private fun sp(c: Context) =
         c.applicationContext.getSharedPreferences("island", Context.MODE_PRIVATE)
@@ -25,6 +30,11 @@ object Prefs {
     fun int(c: Context, k: String, d: Int): Int = sp(c).getInt(k, d)
     fun setInt(c: Context, k: String, v: Int) { sp(c).edit().putInt(k, v).apply() }
 
+    fun idle(c: Context)         = bool(c, IDLE, true)
+    fun idleW(c: Context)        = int(c, IDLE_W, 56)
+    fun idleH(c: Context)        = int(c, IDLE_H, 24)
+    fun expDrop(c: Context)      = int(c, EXP_DROP, 10)
+    fun replaceSys(c: Context)   = bool(c, REPLACE_SYS, true)
     fun keepAlive(c: Context)    = bool(c, KEEP_ALIVE, false)
     fun enabled(c: Context)      = bool(c, ENABLED)
     fun notifs(c: Context)       = bool(c, NOTIFS)

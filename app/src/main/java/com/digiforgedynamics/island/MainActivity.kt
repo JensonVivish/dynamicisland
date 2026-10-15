@@ -43,6 +43,7 @@ class MainActivity : Activity() {
         super.onResume()
         refreshers.forEach { it() }
         startSvc()
+        IslandController.get(this).refresh()
     }
 
     private fun buildUI(root: LinearLayout) {
@@ -101,6 +102,8 @@ class MainActivity : Activity() {
         swRow(root, "Bluetooth accessory battery",Prefs.BT_BATTERY,  true)
         swRow(root, "Navigation (Maps / Waze)",  Prefs.NAV,          true)
         swRow(root, "Live tiles (Uber, Swiggy, flights…)", Prefs.LIVE_TILES, true)
+        swRow(root, "Always-on island (tap it for the quick menu)", Prefs.IDLE, true)
+        swRow(root, "Replace system notifications (cleared and shown here)", Prefs.REPLACE_SYS, true)
         swRow(root, "Hide in landscape",         Prefs.HIDE_LANDSCAPE, true)
         swRow(root, "Extra keep-alive (adds a silent notification)", Prefs.KEEP_ALIVE, false) { on ->
             if (on) startSvc() else stopService(Intent(this, KeepAliveService::class.java))
@@ -108,7 +111,10 @@ class MainActivity : Activity() {
 
         // ── Position ──────────────────────────────────────────────────────
         section(root, "POSITION")
-        sliderRow(root, "Distance from top", Prefs.TOP,  8,  0,  120, " dp")
+        sliderRow(root, "Island height from top (align with camera)", Prefs.TOP, 8, -30, 120, " dp")
+        sliderRow(root, "Notification drop-down below island", Prefs.EXP_DROP, 10, 0, 80, " dp")
+        sliderRow(root, "Idle pill width", Prefs.IDLE_W, 56, 20, 200, " dp")
+        sliderRow(root, "Idle pill height", Prefs.IDLE_H, 24, 8, 60, " dp")
         sliderRow(root, "Horizontal offset", Prefs.X,    0, -180, 180, " dp")
         sliderRow(root, "Show duration",     Prefs.HOLD, 5,  2,   15,  " s")
 
@@ -116,6 +122,7 @@ class MainActivity : Activity() {
         section(root, "TRY IT")
         root.addView(btn("Test notification", accent, Color.BLACK) { testNotif() }, lp(0, 8))
         root.addView(btn("Test media controls", 0xFF252530.toInt(), Color.WHITE) { testMedia() }, lp(0, 8))
+        root.addView(btn("Test message + reply", 0xFF252530.toInt(), Color.WHITE) { testMessage() }, lp(0, 8))
         root.addView(btn("Test charging", 0xFF252530.toInt(), Color.WHITE) { testCharge() }, lp(0, 8))
         root.addView(btn("Blocked apps", 0xFF252530.toInt(), Color.WHITE) {
             go(Intent(this, AppsActivity::class.java)) }, lp(0, 8))
@@ -163,6 +170,26 @@ class MainActivity : Activity() {
                 ),
                 sticky = true
             )
+        )
+    }
+
+    private fun testMessage() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Grant \"Display over other apps\" first", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val ctl = IslandController.get(this)
+        ctl.show(
+            IslandEvent(
+                key = "test_msg", title = "Alex",
+                text = "Are we still on for tonight?",
+                iconRes = android.R.drawable.ic_dialog_email, iconTint = 0xFF22D3EE.toInt(),
+                onReply = { reply ->
+                    ctl.show(IslandEvent(key = "test_sent", title = "Sent", text = reply,
+                        iconRes = android.R.drawable.ic_dialog_info, userInitiated = true), 2500)
+                },
+                startExpanded = true, userInitiated = true
+            ), Prefs.holdMs(this)
         )
     }
 

@@ -6,7 +6,9 @@ import android.graphics.*
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.text.TextUtils
+import android.view.inputmethod.InputMethodManager
 import android.view.*
 import android.view.animation.*
 import android.widget.*
@@ -134,6 +136,11 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
 
     // Action row
     private val actRow = LinearLayout(ctx)
+    private val hRow = LinearLayout(ctx)
+    private val menuBox = LinearLayout(ctx)
+    private val replyBox = LinearLayout(ctx)
+    private val replyEt = EditText(ctx)
+    private var wasTyping = false
 
     // Size anim
     private var sizeAnim: ValueAnimator? = null
@@ -224,7 +231,6 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
         actRow.orientation = LinearLayout.HORIZONTAL; actRow.gravity = Gravity.CENTER
 
         // ── header row: icon | col | accessories ──
-        val hRow = LinearLayout(ctx)
         hRow.orientation = LinearLayout.HORIZONTAL; hRow.gravity = Gravity.CENTER_VERTICAL
 
         // icon box — 30 dp square so it never touches the title
@@ -256,6 +262,58 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         actLp.topMargin = dp(10)
         pill.addView(actRow, actLp)
+
+        // quick-menu grid
+        menuBox.orientation = LinearLayout.VERTICAL
+        menuBox.visibility = View.GONE
+        pill.addView(menuBox, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(10) })
+
+        // reply box: quick replies + text field + send
+        replyBox.orientation = LinearLayout.VERTICAL
+        replyBox.visibility = View.GONE
+        val chips = LinearLayout(ctx)
+        chips.orientation = LinearLayout.HORIZONTAL
+        for (q in listOf("\uD83D\uDC4D", "OK", "On my way", "Call you later")) {
+            val t = TextView(ctx)
+            t.text = q; t.setTextColor(Color.WHITE); t.textSize = 12.5f
+            t.setPadding(dp(10), dp(6), dp(10), dp(6))
+            val cg = GradientDrawable(); cg.cornerRadius = dp(14).toFloat(); cg.setColor(0xFF2C2C2E.toInt())
+            t.background = cg
+            t.setOnClickListener { c.sendReply(q) }
+            chips.addView(t, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also { it.marginEnd = dp(6) })
+        }
+        val chipScroll = HorizontalScrollView(ctx)
+        chipScroll.isHorizontalScrollBarEnabled = false
+        chipScroll.addView(chips)
+        replyBox.addView(chipScroll)
+        val inRow = LinearLayout(ctx)
+        inRow.orientation = LinearLayout.HORIZONTAL
+        inRow.gravity = Gravity.CENTER_VERTICAL
+        replyEt.hint = "Type a reply\u2026"
+        replyEt.setHintTextColor(0xFF8E8E98.toInt()); replyEt.setTextColor(Color.WHITE); replyEt.textSize = 14f
+        replyEt.maxLines = 3
+        replyEt.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        replyEt.setPadding(dp(12), dp(8), dp(12), dp(8))
+        val eg = GradientDrawable(); eg.cornerRadius = dp(18).toFloat(); eg.setColor(0xFF1F1F24.toInt())
+        replyEt.background = eg
+        val send = TextView(ctx)
+        send.text = "Send"; send.setTextColor(Color.BLACK); send.textSize = 13.5f; send.gravity = Gravity.CENTER
+        send.setTypeface(send.typeface, android.graphics.Typeface.BOLD)
+        send.setPadding(dp(14), 0, dp(14), 0)
+        val sg = GradientDrawable(); sg.cornerRadius = dp(18).toFloat(); sg.setColor(0xFF22D3EE.toInt())
+        send.background = sg
+        send.setOnClickListener {
+            val t = replyEt.text.toString().trim()
+            if (t.isNotEmpty()) { replyEt.setText(""); c.sendReply(t) }
+        }
+        inRow.addView(replyEt, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        inRow.addView(send, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)).also { it.marginStart = dp(8) })
+        replyBox.addView(inRow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(8) })
+        pill.addView(replyBox, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(10) })
 
         // ── touch ──
         pill.setOnTouchListener { _, ev -> onTouch(ev); true }
@@ -300,7 +358,9 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
             MeasureSpec.makeMeasureSpec(maxW,
                 if (expanded) MeasureSpec.EXACTLY else MeasureSpec.AT_MOST),
             MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-        val tw = pill.measuredWidth; val th = pill.measuredHeight
+        val isIdle = e.style == IslandStyle.IDLE
+        val tw = if (isIdle) dp(Prefs.idleW(context)) else pill.measuredWidth
+        val th = if (isIdle) dp(Prefs.idleH(context)) else pill.measuredHeight
         val p  = pill.layoutParams as FrameLayout.LayoutParams
         if (!shown) {
             p.width = tw; p.height = th; pill.layoutParams = p; setRadius(th); shown = true
@@ -310,9 +370,56 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
             animateTo(tw, th) { if (collapsing) applyContent(e, false) }
         }
         curExpanded = expanded
+        if (c.typing && e.onReply != null) {
+            if (!wasTyping) {
+                wasTyping = true
+                postDelayed({
+                    replyEt.requestFocus()
+                    context.getSystemService(InputMethodManager::class.java).showSoftInput(replyEt, 0)
+                }, 150)
+            }
+        } else {
+            wasTyping = false
+        }
+    }
+
+    private fun idleMode() {
+        hRow.visibility = View.GONE
+        actRow.visibility = View.GONE
+        menuBox.visibility = View.GONE
+        replyBox.visibility = View.GONE
+        pill.setPadding(0, 0, 0, 0)
+        pill.minimumWidth = 0
+    }
+
+    private fun normalMode() {
+        hRow.visibility = View.VISIBLE
+        pill.setPadding(dp(12), dp(9), dp(12), dp(9))
+        pill.minimumWidth = dp(90)
+        menuBox.removeAllViews()
+        menuBox.visibility = View.GONE
+        replyBox.visibility = View.GONE
+    }
+
+    fun hideKeyboard() {
+        try {
+            context.getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(windowToken, 0)
+        } catch (ex: Exception) {
+        }
+    }
+
+    override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+        if (ev.keyCode == KeyEvent.KEYCODE_BACK && ev.action == KeyEvent.ACTION_UP && c.typing) {
+            c.endTyping()
+            return true
+        }
+        return super.dispatchKeyEvent(ev)
     }
 
     private fun applyContent(e: IslandEvent, exp: Boolean) {
+        if (e.style == IslandStyle.IDLE) { idleMode(); return }
+        normalMode()
+        bodyTv.maxLines = if (exp) 6 else 2
         // reset every sub-view
         icon.visibility     = View.GONE
         bodyTv.visibility   = View.GONE
@@ -357,6 +464,7 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
             }
             IslandStyle.TIMER -> {
                 showChron(e); showBody(e)
+                if (exp) showActions(e)
             }
             IslandStyle.PROGRESS -> {
                 val pct = if (e.progressMax > 0) e.progressVal * 100 / e.progressMax else 0
@@ -392,6 +500,9 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
                 dot.visibility = View.VISIBLE; showBody(e); showChron(e)
                 if (exp) showActions(e)
             }
+            IslandStyle.MENU -> {
+                buildMenu(e)
+            }
             IslandStyle.HOTSPOT, IslandStyle.LIVE_TILE -> {
                 showBody(e)
                 if (!e.subText.isNullOrEmpty()) {
@@ -405,6 +516,7 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
                 if (exp) showActions(e)
             }
             else -> { // DEFAULT
+                showReply(e, exp)
                 showChron(e)
                 if (!e.accessoryText.isNullOrEmpty()) {
                     accTv.text = e.accessoryText
@@ -417,6 +529,37 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
         }
     }
 
+    private fun showReply(e: IslandEvent, exp: Boolean) {
+        if (!exp || e.onReply == null) return
+        if (c.typing) {
+            replyBox.visibility = View.VISIBLE
+        } else {
+            actRow.addView(buildAction(IslandAction("\u21A9 Reply") { c.beginTyping() }))
+            actRow.visibility = View.VISIBLE
+        }
+    }
+
+    private fun buildMenu(e: IslandEvent) {
+        menuBox.removeAllViews()
+        for (row in e.actions.chunked(4)) {
+            val r = LinearLayout(context)
+            r.orientation = LinearLayout.HORIZONTAL
+            for (a in row) {
+                val t = TextView(context)
+                t.text = a.label ?: ""; t.setTextColor(Color.WHITE); t.textSize = 12f; t.gravity = Gravity.CENTER
+                val g = GradientDrawable(); g.cornerRadius = dp(16).toFloat(); g.setColor(0xFF1F1F24.toInt())
+                t.background = g
+                t.setOnClickListener { a.onClick() }
+                r.addView(t, LinearLayout.LayoutParams(0, dp(56), 1f).also { it.setMargins(dp(3), dp(3), dp(3), dp(3)) })
+            }
+            repeat(4 - row.size) {
+                r.addView(View(context), LinearLayout.LayoutParams(0, dp(56), 1f).also { it.setMargins(dp(3), dp(3), dp(3), dp(3)) })
+            }
+            menuBox.addView(r, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        menuBox.visibility = View.VISIBLE
+    }
+
     private fun showBody(e: IslandEvent) {
         if (!e.text.isNullOrEmpty()) { bodyTv.text = e.text; bodyTv.visibility = View.VISIBLE }
     }
@@ -427,7 +570,7 @@ class IslandView(ctx: Context, private val c: IslandController) : FrameLayout(ct
         chron.start(); chron.visibility = View.VISIBLE
     }
     private fun showActions(e: IslandEvent) {
-        if (e.actions.isEmpty()) return
+        if (e.actions.isEmpty() || c.typing) return
         e.actions.forEach { actRow.addView(buildAction(it)) }
         actRow.visibility = View.VISIBLE
     }
